@@ -1,8 +1,10 @@
+import neat
 import pygame
 import sys
 import random
 import numpy
 import math
+import pickle
 
 WIDTH = 1100
 HEIGHT =600
@@ -26,16 +28,18 @@ Type of players:
 2. Neural Network
 3. Random AI
 4. Minimax AI
+5. Training AI
 '''
-PLAYERS = ['Random AI', 'Minimax AI', -1]
+PLAYERS = ['Neural Network', 'Random AI', -1]
 
-AI_depth = [0, 1]
+AI_depth = [1, 1]
 
 Manual = False
 
-Interval_time = 00 
+Interval_time = 00
 
-Max_games = 1000
+Max_games = 40
+
 
 class Board(pygame.sprite.Sprite):
 	def __init__(self, game):
@@ -140,7 +144,7 @@ class MinimaxClass():
 		elif area.count(disc) == 2 and area.count(0) == 2:
 			score += 2
 		if area.count(opp_disc) == 3 and area.count(0) == 1:
-			score -= 4
+			score -= 8
 		return score
 
 	def count_up_scores(self, board, disc, opp_disc):
@@ -184,12 +188,14 @@ class Game():
 		self.tracker = [0,0,0]
 		self.minimax = MinimaxClass(self)
 
-	def new_game(self):
+	def new_game(self, net, genome):
 		self.all_sprites_group = pygame.sprite.Group()
 		self.discs_group = pygame.sprite.Group()
 		self.current_player = 1
 		self.board = Board(self)
 		self.last_time = pygame.time.get_ticks()
+		self.net = net
+		self.genome = genome
 
 	def game_loop(self):
 		self.run = True
@@ -233,6 +239,8 @@ class Game():
 			self.board.board_data[x_index][y_index] = self.current_player
 			if self.win_detection(self.board.board_data, self.current_player):
 				self.game_over()
+			elif PLAYERS[self.current_player-1] == 'Neural Network':
+				self.genome.fitness += self.evaluate_move()
 			if self.current_player == 1:
 				self.current_player = 2
 			else:
@@ -262,30 +270,60 @@ class Game():
 					print(self.minimax.Minimax(self.board.board_data, AI_depth[self.current_player-1], True, self.current_player, (1 if self.current_player == 2 else 2)))
 					return i
 		elif PLAYERS[self.current_player-1] == 'Neural Network':
-			pass
+			output = self.net.activate(self.board.board_data.flatten())
+			index = output.index(max(output))
+			while index not in self.available_moves():
+				output[index] = -math.inf
+				index = output.index(max(output))
+			return index
 		elif PLAYERS[self.current_player-1] == 'Minimax AI':
 			return self.minimax.Minimax(self.board.board_data, AI_depth[self.current_player-1], True, self.current_player, (1 if self.current_player == 2 else 2))[0]
 		elif PLAYERS[self.current_player-1] == 'Random AI':
 			return random.choice(self.available_moves())
+		elif PLAYERS[self.current_player-1] == 'Training AI':
+			return self.training_AI()
 		return -1
 
 	def win_detection(self, data, player):
 		for x in range(7):
 			for y in range(3):
 				if (data[x][y] == player) and (data[x][y+1] == player) and (data[x][y+2] == player) and (data[x][y+3] == player):
+					if PLAYERS[self.current_player-1] == 'Neural Network':
+						self.genome.fitness += 10
 					return True
 		for x in range(4):
 			for y in range(6):
 				if (data[x][y] == player) and (data[x+1][y] == player) and (data[x+2][y] == player) and (data[x+3][y] == player):
+					if PLAYERS[self.current_player-1] == 'Neural Network':
+						self.genome.fitness += 10
 					return True
 		for x in range(4):
 			for y in range(3):
 				if (data[x][y] == player) and (data[x+1][y+1] == player) and (data[x+2][y+2] == player) and (data[x+3][y+3] == player):
+					if PLAYERS[self.current_player-1] == 'Neural Network':
+						self.genome.fitness += 10
 					return True
 		for x in range(4):
 			for y in range(3,6):
 				if (data[x][y] == player) and (data[x+1][y-1] == player) and (data[x+2][y-2] == player) and (data[x+3][y-3] == player):
+					if PLAYERS[self.current_player-1] == 'Neural Network':
+						self.genome.fitness += 10
 					return True
+
+	def evaluate_move(self):
+		return 0
+
+	def training_AI(self):
+		data = self.board.board_data
+		opp_disc = (1 if self.current_player == 2 else 2)
+		counter = 0
+		for x in data:
+			for y in range(3):
+				area = x[y:y+4].tolist()
+				if area.count(opp_disc) == 3 and area.count(0) == 1:
+					return counter
+			counter += 1
+		return random.choice(self.available_moves())
 
 	def game_over(self):
 		self.run = False
@@ -321,6 +359,7 @@ class Game():
 		texts += '\nPlayer 1 win rate : ' + "{:.2f}".format(winrate1) + '%'
 		texts += '\nPlayer 2 win rate : ' + "{:.2f}".format(winrate2) + '%'
 		texts += '\nDraw rate : ' + "{:.2f}".format(drawrate) + '%'
+		texts += '\ncurrent fitness : ' + str(self.genome.fitness)
 		self.blit_texts(texts, WHITE, 710, 0, 40, self.font)
 		pygame.display.flip()
 
@@ -336,10 +375,58 @@ class Game():
 		pygame.quit()
 		sys.exit()
 
-
+'''
 game = Game()
 while True:
 	game.new_game()
+	game.game_loop()
+	if Manual or sum(game.tracker) >= Max_games:
+		game.wait_loop()
+'''
+
+def eval_genomes(genomes, config):
+	#print('Generation', p.generation+1)
+	#counter = 0
+	#total_fitness = 0
+	#best_fitness = 0
+	for genome_id, genome in genomes:
+		#counter += 1
+		game = Game()
+		net = neat.nn.FeedForwardNetwork.create(genome, config)
+		genome.fitness = 0
+		#print('Genome', counter)
+		while sum(game.tracker) < Max_games:
+			game.new_game(net, genome)
+			game.game_loop()
+		#print('result:', game.tracker, '\nfitness:', genome.fitness)
+		#if genome.fitness > best_fitness:
+		#	best_fitness = genome.fitness
+		#total_fitness += genome.fitness
+	#print('Generation end\nAverage fitness:', total_fitness/counter,'\nBest fitness:', best_fitness)
+
+
+
+config = neat.Config(neat.DefaultGenome, neat.DefaultReproduction,
+                     neat.DefaultSpeciesSet, neat.DefaultStagnation,
+                     'config')
+
+p = neat.Population(config)
+
+p.add_reporter(neat.StdOutReporter(True))
+
+winner = p.run(eval_genomes)
+
+print('\nBest genome:\n{!s}'.format(winner))
+
+with open('Trained_net', 'wb') as f:
+	pickle.dump(winner, f)
+
+winner_net = neat.nn.FeedForwardNetwork.create(winner, config)
+
+Max_games = 10000
+game = Game()
+while True:
+	game.new_game(winner_net, winner)
 	game.game_loop()
 	if Manual or sum(game.tracker) >= Max_games:
 		game.wait_loop()
